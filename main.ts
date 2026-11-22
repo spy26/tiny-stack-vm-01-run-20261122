@@ -1,44 +1,172 @@
-// Tiny stack VM, written fresh from the kit ISA spec. One run answers every
-// instance in MAKEFUN_INPUT_DIR (default /input), writing answers to
-// MAKEFUN_OUTPUT_DIR (default /output) as <id>/stdout.bin + <id>/exit.txt.
-import{readdirSync as A,readFileSync as B,mkdirSync as C,writeFileSync as D}from'node:fs';
-import{join as J}from'node:path';
-const I=process.env.MAKEFUN_INPUT_DIR||'/input',O=process.env.MAKEFUN_OUTPUT_DIR||'/output';
-const T={16:(a,b)=>(a+b)|0,17:(a,b)=>(a-b)|0,18:Math.imul,24:(a,b)=>a&b,25:(a,b)=>a|b,26:(a,b)=>a^b,32:(a,b)=>a===b?1:0,33:(a,b)=>a<b?1:0,34:(a,b)=>(a>>>0)<(b>>>0)?1:0};
-function R(p,g){
-const s=new Int32Array(256),c=new Int32Array(64),m=new Int32Array(256),o=Buffer.alloc(65536);
-let sp=0,cp=0,pc=0,n=0,ip=0,ol=0;
-const e=t=>({out:o.subarray(0,ol),exit:t});
-for(;;){
-if(n===1e6)return e(10);
-if(pc<0||pc>=p.length)return e(9);
-const q=p[pc];n++;
-if(q===0)return e(0);
-if(q===1){if(pc+2>p.length)return e(9);if(sp===256)return e(3);s[sp++]=(p[pc+1]<<24)>>24;pc+=2;continue;}
-if(q===2){if(pc+5>p.length)return e(9);if(sp===256)return e(3);s[sp++]=p[pc+1]|p[pc+2]<<8|p[pc+3]<<16|p[pc+4]<<24;pc+=5;continue;}
-if(q===3){if(sp<1)return e(2);sp--;pc++;continue;}
-if(q===4){if(sp<1)return e(2);if(sp===256)return e(3);s[sp]=s[sp-1];sp++;pc++;continue;}
-if(q===5){if(sp<2)return e(2);const t=s[sp-1];s[sp-1]=s[sp-2];s[sp-2]=t;pc++;continue;}
-if(q===6){if(sp<2)return e(2);if(sp===256)return e(3);s[sp]=s[sp-2];sp++;pc++;continue;}
-if(q===7){if(sp<3)return e(2);const t=s[sp-3];s[sp-3]=s[sp-2];s[sp-2]=s[sp-1];s[sp-1]=t;pc++;continue;}
-if(q===0x17||q===0x1b){if(sp<1)return e(2);s[sp-1]=q===0x17?(-s[sp-1])|0:~s[sp-1];pc++;continue;}
-if(q>=0x1c&&q<=0x1e){if(sp<2)return e(2);const b=s[--sp],a=s[sp-1];s[sp-1]=q===0x1c?a<<(b&31):q===0x1d?a>>(b&31):(a>>>(b&31))|0;pc++;continue;}
-if(q===0x10||q===0x11||q===0x12||q===0x18||q===0x19||q===0x1a||q>=0x20&&q<=0x22){if(sp<2)return e(2);const b=s[sp-1],a=s[sp-2];sp--;s[sp-1]=T[q](a,b);pc++;continue;}
-if(q>=0x13&&q<=0x16){if(sp<2)return e(2);const b=s[sp-1],a=s[sp-2];if(!b)return e(4);let r;if(q===0x13)r=Math.trunc(a/b)|0;else if(q===0x14)r=(a%b)|0;else if(q===0x15)r=Math.trunc((a>>>0)/(b>>>0))|0;else r=((a>>>0)%(b>>>0))|0;sp--;s[sp-1]=r;pc++;continue;}
-if(q===0x30){if(pc+3>p.length)return e(9);let f=p[pc+1]|p[pc+2]<<8;if(f>=0x8000)f-=0x10000;pc=pc+3+f;continue;}
-if(q===0x31||q===0x32){if(pc+3>p.length)return e(9);if(sp<1)return e(2);let f=p[pc+1]|p[pc+2]<<8;if(f>=0x8000)f-=0x10000;const v=s[--sp];if(q===0x31?v===0:v!==0)pc=pc+3+f;else pc+=3;continue;}
-if(q===0x33){if(pc+3>p.length)return e(9);if(cp===64)return e(7);c[cp++]=pc+3;pc=p[pc+1]|p[pc+2]<<8;continue;}
-if(q===0x34){if(!cp)return e(8);pc=c[--cp];continue;}
-if(q===0x40){if(sp<1)return e(2);const a=s[sp-1];if(a<0||a>255)return e(6);s[sp-1]=m[a];pc++;continue;}
-if(q===0x41){if(sp<2)return e(2);const a=s[sp-1],v=s[sp-2];if(a<0||a>255)return e(6);m[a]=v;sp-=2;pc++;continue;}
-if(q===0x50){if(sp<1)return e(2);const t=String(s[--sp]);if(ol+t.length>65536)return e(11);for(let i=0;i<t.length;i++)o[ol++]=t.charCodeAt(i);pc++;continue;}
-if(q===0x51){if(sp<1)return e(2);if(ol+1>65536)return e(11);o[ol++]=s[--sp]&255;pc++;continue;}
-if(q===0x52){if(sp===256)return e(3);s[sp++]=ip<g.length?g[ip++]:-1;pc++;continue;}
-if(q===0x53){if(sp<1)return e(2);return e(s[--sp]&255);}
-return e(5);
+import {readdirSync, readFileSync, mkdirSync, writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+
+const IN = process.env.MAKEFUN_INPUT_DIR || '/input';
+const OUT = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+
+// One tiny-stack program: returns [stdout bytes, exit code].
+function run(p: Uint8Array, inp: Uint8Array): [Buffer, number] {
+  const s = new Int32Array(256); // data stack
+  let sp = 0;
+  const c = new Int32Array(64); // call stack
+  let cp = 0;
+  const m = new Int32Array(256); // memory
+  const o: number[] = []; // output bytes
+  const n = p.length;
+  let pc = 0, steps = 0, ip = 0, code = 0;
+  outer: while (true) {
+    if (steps >= 1000000) { code = 10; break; }
+    if (pc < 0 || pc >= n) { code = 9; break; }
+    const op = p[pc];
+    const ok = op <= 7 || (op >= 16 && op <= 30) || (op >= 32 && op <= 34) || (op >= 48 && op <= 52) || (op >= 64 && op <= 65) || (op >= 80 && op <= 83);
+    if (!ok) { code = 5; break; }
+    const il = op === 1 ? 1 : op === 2 ? 4 : op >= 48 && op <= 51 ? 2 : 0;
+    if (pc + 1 + il > n) { code = 9; break; }
+    steps++;
+    let np = pc + 1 + il;
+    let a: number, b: number;
+    switch (op) {
+      case 0: return [Buffer.from(o), 0];
+      case 1:
+        if (sp >= 256) { code = 3; break outer; }
+        s[sp++] = (p[pc + 1] << 24) >> 24; break;
+      case 2:
+        if (sp >= 256) { code = 3; break outer; }
+        s[sp++] = p[pc + 1] | (p[pc + 2] << 8) | (p[pc + 3] << 16) | (p[pc + 4] << 24); break;
+      case 3:
+        if (sp < 1) { code = 2; break outer; }
+        sp--; break;
+      case 4:
+        if (sp < 1) { code = 2; break outer; }
+        if (sp >= 256) { code = 3; break outer; }
+        s[sp] = s[sp - 1]; sp++; break;
+      case 5:
+        if (sp < 2) { code = 2; break outer; }
+        a = s[sp - 1]; s[sp - 1] = s[sp - 2]; s[sp - 2] = a; break;
+      case 6:
+        if (sp < 2) { code = 2; break outer; }
+        if (sp >= 256) { code = 3; break outer; }
+        s[sp] = s[sp - 2]; sp++; break;
+      case 7:
+        if (sp < 3) { code = 2; break outer; }
+        a = s[sp - 3]; s[sp - 3] = s[sp - 2]; s[sp - 2] = s[sp - 1]; s[sp - 1] = a; break;
+      case 16:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = (s[sp - 1] + b) | 0; break;
+      case 17:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = (s[sp - 1] - b) | 0; break;
+      case 18:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = Math.imul(s[sp - 1], b); break;
+      case 19:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp];
+        if (b === 0) { code = 4; break outer; }
+        s[sp - 1] = (s[sp - 1] / b) | 0; break;
+      case 20:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp];
+        if (b === 0) { code = 4; break outer; }
+        s[sp - 1] = (s[sp - 1] % b) | 0; break;
+      case 21:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp];
+        if (b === 0) { code = 4; break outer; }
+        s[sp - 1] = ((s[sp - 1] >>> 0) / (b >>> 0)) | 0; break;
+      case 22:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp];
+        if (b === 0) { code = 4; break outer; }
+        s[sp - 1] = ((s[sp - 1] >>> 0) % (b >>> 0)) | 0; break;
+      case 23:
+        if (sp < 1) { code = 2; break outer; }
+        s[sp - 1] = (-s[sp - 1]) | 0; break;
+      case 24:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] & b; break;
+      case 25:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] | b; break;
+      case 26:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] ^ b; break;
+      case 27:
+        if (sp < 1) { code = 2; break outer; }
+        s[sp - 1] = ~s[sp - 1]; break;
+      case 28:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] << (b & 31); break;
+      case 29:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] >> (b & 31); break;
+      case 30:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = (s[sp - 1] >>> (b & 31)) | 0; break;
+      case 32:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] === b ? 1 : 0; break;
+      case 33:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = s[sp - 1] < b ? 1 : 0; break;
+      case 34:
+        if (sp < 2) { code = 2; break outer; }
+        b = s[--sp]; s[sp - 1] = (s[sp - 1] >>> 0) < (b >>> 0) ? 1 : 0; break;
+      case 48: np += ((p[pc + 1] | (p[pc + 2] << 8)) << 16) >> 16; break;
+      case 49:
+        if (sp < 1) { code = 2; break outer; }
+        if (s[--sp] === 0) np += ((p[pc + 1] | (p[pc + 2] << 8)) << 16) >> 16; break;
+      case 50:
+        if (sp < 1) { code = 2; break outer; }
+        if (s[--sp] !== 0) np += ((p[pc + 1] | (p[pc + 2] << 8)) << 16) >> 16; break;
+      case 51:
+        if (cp >= 64) { code = 7; break outer; }
+        c[cp++] = np; np = p[pc + 1] | (p[pc + 2] << 8); break;
+      case 52:
+        if (cp === 0) { code = 8; break outer; }
+        np = c[--cp]; break;
+      case 64:
+        if (sp < 1) { code = 2; break outer; }
+        a = s[sp - 1];
+        if (a < 0 || a > 255) { code = 6; break outer; }
+        s[sp - 1] = m[a]; break;
+      case 65:
+        if (sp < 2) { code = 2; break outer; }
+        a = s[sp - 1]; b = s[sp - 2];
+        if (a < 0 || a > 255) { code = 6; break outer; }
+        m[a] = b; sp -= 2; break;
+      case 80: {
+        if (sp < 1) { code = 2; break outer; }
+        const t = String(s[sp - 1]);
+        if (o.length + t.length > 65536) { code = 11; break outer; }
+        sp--;
+        for (let i = 0; i < t.length; i++) o.push(t.charCodeAt(i));
+        break;
+      }
+      case 81:
+        if (sp < 1) { code = 2; break outer; }
+        if (o.length + 1 > 65536) { code = 11; break outer; }
+        o.push(s[--sp] & 255); break;
+      case 82:
+        if (sp >= 256) { code = 3; break outer; }
+        s[sp++] = ip < inp.length ? inp[ip++] : -1; break;
+      case 83:
+        if (sp < 1) { code = 2; break outer; }
+        return [Buffer.from(o), s[--sp] & 255];
+    }
+    pc = np;
+  }
+  return [Buffer.from(o), code];
 }
-}
-for(const d of A(I,{withFileTypes:true}).filter(d=>d.isDirectory()).map(d=>d.name).sort()){
-const p=B(J(I,d,'program.bin'));let g;try{g=B(J(I,d,'input.bin'))}catch{g=Buffer.alloc(0)}
-const r=R(p,g),o=J(O,d);C(o,{recursive:true});D(J(o,'stdout.bin'),r.out);D(J(o,'exit.txt'),String(r.exit));
+
+for (const id of readdirSync(IN)) {
+  const d = join(IN, id);
+  let prog: Buffer;
+  try { prog = readFileSync(join(d, 'program.bin')); } catch { continue; }
+  let inp: Buffer;
+  try { inp = readFileSync(join(d, 'input.bin')); } catch { inp = Buffer.alloc(0); }
+  const [out, code] = run(prog, inp);
+  mkdirSync(join(OUT, id), {recursive: true});
+  writeFileSync(join(OUT, id, 'stdout.bin'), out);
+  writeFileSync(join(OUT, id, 'exit.txt'), String(code));
 }
